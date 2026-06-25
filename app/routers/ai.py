@@ -10,6 +10,7 @@ from app.utils.security import get_current_user
 from app.utils.helpers import log_action
 from app.services.ai_service import analyze_stock, analyze_portfolio
 from app.config import settings
+from app.routers.stocks import calc_fundamentals
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
@@ -21,7 +22,6 @@ class PortfolioAnalysisRequest(BaseModel):
     metrics: dict
 
 def extract_recommendation(text: str) -> Optional[str]:
-    """Extract BUY/HOLD/SELL from AI analysis text."""
     patterns = [
         r'RECOMMENDATION[:\s]+\*?\*?(BUY|HOLD|SELL)\*?\*?',
         r'\b(BUY|HOLD|SELL)\b',
@@ -33,7 +33,6 @@ def extract_recommendation(text: str) -> Optional[str]:
     return None
 
 def extract_risk_level(text: str) -> Optional[str]:
-    """Extract LOW/MEDIUM/HIGH risk from AI analysis text."""
     patterns = [
         r'RISK\s+SCORE[:\s]+\*?\*?(LOW|MEDIUM|HIGH)\*?\*?',
         r'RISK\s+LEVEL[:\s]+\*?\*?(LOW|MEDIUM|HIGH)\*?\*?',
@@ -56,19 +55,21 @@ async def run_stock_analysis(
     ticker = payload.ticker.upper()
     stock  = db.query(Stock).filter(Stock.ticker == ticker).first()
 
-    # Get latest financials and prices
-    financials   = db.query(StockFinancial).filter(StockFinancial.ticker == ticker).order_by(desc(StockFinancial.year)).first()
-    latest_price = db.query(StockPrice).filter(StockPrice.ticker == ticker).order_by(desc(StockPrice.date)).first()
+    # ── Auto-calculated fundamentals: P/E, ROE, Debt/Equity ───────────────────
+    fundamentals = calc_fundamentals(db, ticker)
 
     financials_dict = {
-        "revenue":    financials.revenue    if financials else "N/A",
-        "net_profit": financials.net_profit if financials else "N/A",
-        "eps":        financials.eps        if financials else "N/A",
-        "year":       financials.year       if financials else "N/A",
+        "revenue":         fundamentals.get("revenue")    or "N/A",
+        "net_profit":      fundamentals.get("net_profit") or "N/A",
+        "eps":             fundamentals.get("eps")         or "N/A",
+        "year":            fundamentals.get("fin_year")    or "N/A",
+        "pe_ratio":        fundamentals.get("pe_ratio")    or "N/A (insufficient data)",
+        "roe_percent":     fundamentals.get("roe")         or "N/A",
+        "debt_to_equity":  fundamentals.get("debt_to_equity") or "N/A",
     }
     prices_dict = {
-        "latest_price": latest_price.close_price if latest_price else "N/A",
-        "date":         str(latest_price.date)   if latest_price else "N/A",
+        "latest_price": fundamentals.get("price")      or "N/A",
+        "date":         fundamentals.get("price_date")  or "N/A",
     }
 
     try:
@@ -87,17 +88,12 @@ async def run_stock_analysis(
     risk_level     = extract_risk_level(analysis_text)
 
     if stock:
-        updated_fields = []
         if recommendation and recommendation in [r.value for r in Recommendation]:
             stock.recommendation = Recommendation(recommendation)
-            updated_fields.append(f"recommendation={recommendation}")
         if risk_level and risk_level in [r.value for r in RiskLevel]:
             stock.risk_level = RiskLevel(risk_level)
-            updated_fields.append(f"risk_level={risk_level}")
-        if updated_fields:
-            db.commit()
+        db.commit()
 
-    # Save to research repository
     research = AIResearch(
         ticker        = ticker,
         analyst_id    = current_user.id,
@@ -112,12 +108,13 @@ async def run_stock_analysis(
     log_action(db, current_user, "Generated AI stock analysis", target=ticker)
 
     return {
-        "ticker":         ticker,
-        "analysis":       analysis_text,
-        "research_id":    research.id,
-        "recommendation": recommendation,
-        "risk_level":     risk_level,
+        "ticker":          ticker,
+        "analysis":        analysis_text,
+        "research_id":     research.id,
+        "recommendation":  recommendation,
+        "risk_level":      risk_level,
         "signals_updated": bool(recommendation or risk_level),
+        "fundamentals_used": fundamentals,
     }
 
 @router.post("/analyze-portfolio")

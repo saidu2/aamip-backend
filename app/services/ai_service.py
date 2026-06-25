@@ -23,36 +23,48 @@ async def call_gemini(prompt: str) -> str:
 async def analyze_stock(ticker: str, name: str, sector: str, financials: dict, prices: dict) -> str:
     prompt = f"""
 You are a senior investment analyst at a Nigerian SEC-regulated asset management firm.
-Analyze the following NGX-listed stock and provide a concise institutional research note.
+Analyze the following NGX-listed stock using the fundamental data provided and produce
+a concise, fact-grounded institutional research note. Base your recommendation on the
+actual numbers given — do not invent figures that are not provided.
 
 Stock: {name} ({ticker})
 Sector: {sector}
-Financial Data: {financials}
-Market Data: {prices}
 
-Provide your analysis in this format:
+KEY FUNDAMENTALS (auto-calculated from latest uploaded data):
+- Latest Price:        {prices.get('latest_price')} (as of {prices.get('date')})
+- EPS (Earnings/Share): {financials.get('eps')}
+- P/E Ratio:           {financials.get('pe_ratio')}
+- Revenue:             {financials.get('revenue')} (FY {financials.get('year')})
+- Net Profit:          {financials.get('net_profit')}
+- ROE (Return on Equity): {financials.get('roe_percent')}%
+- Debt-to-Equity Ratio: {financials.get('debt_to_equity')}
+
+If any figure shows "N/A", explicitly note that this data has not yet been uploaded
+and that the recommendation confidence is limited accordingly — do not fabricate a number.
+
+Provide your analysis in this exact format:
 
 COMPANY OVERVIEW
 [2-3 sentences about what the company does and its market position in Nigeria]
 
 FINANCIAL HEALTH
-[Assessment of profitability, revenue trend, and balance sheet]
+[Assess profitability and balance sheet strength using the ROE and Debt-to-Equity figures above. State the actual numbers in your reasoning.]
 
 VALUATION
-[Is the stock cheap or expensive relative to NGX sector peers?]
+[Assess whether the stock is cheap or expensive using the P/E ratio given. Compare qualitatively to typical NGX sector multiples. State the actual P/E number in your reasoning.]
 
 KEY RISKS
-• [Risk 1]
+• [Risk 1 — tie to the data where possible, e.g. high debt-to-equity]
 • [Risk 2]
 • [Risk 3]
 
 RECOMMENDATION: BUY / HOLD / SELL
-[One clear sentence explaining why]
+[One clear sentence explaining why, explicitly referencing the P/E ratio, EPS, or ROE figures used]
 
 RISK SCORE: LOW / MEDIUM / HIGH
 [One sentence on the main risk driver]
 
-Keep the tone professional and institutional.
+Keep the tone professional, factual, and institutional. If fundamental data is missing (N/A), recommend HOLD with a note that more data is needed for a confident call.
 """
     return await call_gemini(prompt)
 
@@ -71,7 +83,7 @@ Max Drawdown: {metrics.get('max_drawdown', 'N/A')}%
 Holdings:
 {holdings_text}
 
-Provide your assessment in this format:
+Provide:
 
 PORTFOLIO OVERVIEW
 [2-3 sentences on strategy and overall performance]
