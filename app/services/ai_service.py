@@ -1,12 +1,46 @@
 import httpx
 from app.config import settings
 
-GEMINI_MODEL = "gemini-2.0-flash"
-GEMINI_URL   = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama3-70b-8192"
+
+async def call_ai(prompt: str) -> str:
+    """
+    Calls Groq API (free, no card required).
+    Falls back to Gemini if GEMINI_API_KEY is set and GROQ_API_KEY is not.
+    """
+    if settings.GROQ_API_KEY:
+        return await call_groq(prompt)
+    elif settings.GEMINI_API_KEY:
+        return await call_gemini(prompt)
+    else:
+        raise ValueError("No AI API key configured. Add GROQ_API_KEY or GEMINI_API_KEY to .env")
+
+async def call_groq(prompt: str) -> str:
+    if not settings.GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY not configured")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        res = await client.post(
+            GROQ_URL,
+            headers={
+                "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": GROQ_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 1200,
+            },
+        )
+        res.raise_for_status()
+        data = res.json()
+        return data["choices"][0]["message"]["content"]
 
 async def call_gemini(prompt: str) -> str:
-    if not settings.GEMINI_API_KEY:
-        raise ValueError("Gemini API key not configured")
+    GEMINI_MODEL = "gemini-2.0-flash"
+    GEMINI_URL   = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         res = await client.post(
@@ -23,24 +57,22 @@ async def call_gemini(prompt: str) -> str:
 async def analyze_stock(ticker: str, name: str, sector: str, financials: dict, prices: dict) -> str:
     prompt = f"""
 You are a senior investment analyst at a Nigerian SEC-regulated asset management firm.
-Analyze the following NGX-listed stock using the fundamental data provided and produce
-a concise, fact-grounded institutional research note. Base your recommendation on the
-actual numbers given — do not invent figures that are not provided.
+Analyze the following NGX-listed stock and produce a concise institutional research note.
+Base your recommendation strictly on the actual figures provided — do not invent numbers.
 
 Stock: {name} ({ticker})
 Sector: {sector}
 
-KEY FUNDAMENTALS (auto-calculated from latest uploaded data):
-- Latest Price:        {prices.get('latest_price')} (as of {prices.get('date')})
-- EPS (Earnings/Share): {financials.get('eps')}
-- P/E Ratio:           {financials.get('pe_ratio')}
-- Revenue:             {financials.get('revenue')} (FY {financials.get('year')})
-- Net Profit:          {financials.get('net_profit')}
+KEY FUNDAMENTALS:
+- Latest Price:           {prices.get('latest_price')} (as of {prices.get('date')})
+- EPS (Earnings/Share):   {financials.get('eps')}
+- P/E Ratio:              {financials.get('pe_ratio')}
+- Revenue:                {financials.get('revenue')} (FY {financials.get('year')})
+- Net Profit:             {financials.get('net_profit')}
 - ROE (Return on Equity): {financials.get('roe_percent')}%
-- Debt-to-Equity Ratio: {financials.get('debt_to_equity')}
+- Debt-to-Equity Ratio:   {financials.get('debt_to_equity')}
 
-If any figure shows "N/A", explicitly note that this data has not yet been uploaded
-and that the recommendation confidence is limited accordingly — do not fabricate a number.
+If any figure shows "N/A", note that data is missing and adjust confidence accordingly.
 
 Provide your analysis in this exact format:
 
@@ -48,28 +80,29 @@ COMPANY OVERVIEW
 [2-3 sentences about what the company does and its market position in Nigeria]
 
 FINANCIAL HEALTH
-[Assess profitability and balance sheet strength using the ROE and Debt-to-Equity figures above. State the actual numbers in your reasoning.]
+[Assessment using ROE and Debt-to-Equity. State the actual numbers.]
 
 VALUATION
-[Assess whether the stock is cheap or expensive using the P/E ratio given. Compare qualitatively to typical NGX sector multiples. State the actual P/E number in your reasoning.]
+[Assessment using P/E ratio vs NGX sector peers. State the actual P/E number.]
 
 KEY RISKS
-• [Risk 1 — tie to the data where possible, e.g. high debt-to-equity]
+• [Risk 1]
 • [Risk 2]
 • [Risk 3]
 
 RECOMMENDATION: BUY / HOLD / SELL
-[One clear sentence explaining why, explicitly referencing the P/E ratio, EPS, or ROE figures used]
+[One clear sentence referencing specific financial metrics]
 
 RISK SCORE: LOW / MEDIUM / HIGH
 [One sentence on the main risk driver]
-
-Keep the tone professional, factual, and institutional. If fundamental data is missing (N/A), recommend HOLD with a note that more data is needed for a confident call.
 """
-    return await call_gemini(prompt)
+    return await call_ai(prompt)
 
 async def analyze_portfolio(name: str, holdings: list, metrics: dict) -> str:
-    holdings_text = "\n".join([f"- {h['ticker']} ({h.get('sector','N/A')}): {h.get('weight',0):.1f}% weight" for h in holdings])
+    holdings_text = "\n".join([
+        f"- {h['ticker']}: {h.get('weight', 0):.1f}% weight, P&L: {h.get('pnl_pct', 0):.1f}%"
+        for h in holdings
+    ])
     prompt = f"""
 You are a senior portfolio manager at a Nigerian SEC-regulated asset management firm.
 Provide an institutional portfolio assessment.
@@ -83,23 +116,23 @@ Max Drawdown: {metrics.get('max_drawdown', 'N/A')}%
 Holdings:
 {holdings_text}
 
-Provide:
+Provide your assessment in this format:
 
 PORTFOLIO OVERVIEW
 [2-3 sentences on strategy and overall performance]
 
 DIVERSIFICATION ASSESSMENT
-[Sector concentration and diversification analysis for a Nigerian fund]
+[Sector concentration analysis for a Nigerian fund]
 
 PERFORMANCE COMMENTARY
-[Commentary on YTD return, Sharpe ratio, and volatility]
+[Commentary on YTD return and risk-adjusted performance]
 
 KEY RISKS
-• [Risk 1]
+• [Risk 1 specific to actual holdings]
 • [Risk 2]
 • [Risk 3]
 
 REBALANCING SUGGESTIONS
-[Specific actionable suggestions based on actual holdings]
+[Specific actionable suggestions based on actual holdings and weights]
 """
-    return await call_gemini(prompt)
+    return await call_ai(prompt)
