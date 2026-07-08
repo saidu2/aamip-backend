@@ -2,7 +2,7 @@ import httpx
 from app.config import settings
 
 GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama3-8b-8192"  # Updated — llama3-70b-8192 was decommissioned
+GROQ_MODEL = "llama-3.1-8b-instant"  # Updated — llama3-70b-8192 was decommissioned
 
 async def call_ai(prompt: str) -> str:
     if settings.GROQ_API_KEY:
