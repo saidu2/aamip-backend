@@ -2,19 +2,15 @@ import httpx
 from app.config import settings
 
 GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama3-70b-8192"
+GROQ_MODEL = "llama3-8b-8192"  # Updated — llama3-70b-8192 was decommissioned
 
 async def call_ai(prompt: str) -> str:
-    """
-    Calls Groq API (free, no card required).
-    Falls back to Gemini if GEMINI_API_KEY is set and GROQ_API_KEY is not.
-    """
     if settings.GROQ_API_KEY:
         return await call_groq(prompt)
     elif settings.GEMINI_API_KEY:
         return await call_gemini(prompt)
     else:
-        raise ValueError("No AI API key configured. Add GROQ_API_KEY or GEMINI_API_KEY to .env")
+        raise ValueError("No AI API key configured. Add GROQ_API_KEY or GEMINI_API_KEY to environment variables.")
 
 async def call_groq(prompt: str) -> str:
     if not settings.GROQ_API_KEY:
@@ -58,7 +54,7 @@ async def analyze_stock(ticker: str, name: str, sector: str, financials: dict, p
     prompt = f"""
 You are a senior investment analyst at a Nigerian SEC-regulated asset management firm.
 Analyze the following NGX-listed stock and produce a concise institutional research note.
-Base your recommendation strictly on the actual figures provided — do not invent numbers.
+Base your recommendation strictly on the actual figures provided.
 
 Stock: {name} ({ticker})
 Sector: {sector}
@@ -74,7 +70,7 @@ KEY FUNDAMENTALS:
 
 If any figure shows "N/A", note that data is missing and adjust confidence accordingly.
 
-Provide your analysis in this exact format:
+Provide analysis in this exact format:
 
 COMPANY OVERVIEW
 [2-3 sentences about what the company does and its market position in Nigeria]
@@ -100,7 +96,7 @@ RISK SCORE: LOW / MEDIUM / HIGH
 
 async def analyze_portfolio(name: str, holdings: list, metrics: dict) -> str:
     holdings_text = "\n".join([
-        f"- {h['ticker']}: {h.get('weight', 0):.1f}% weight, P&L: {h.get('pnl_pct', 0):.1f}%"
+        f"- {h['ticker']}: quantity {h.get('quantity', 0)}, cost price {h.get('cost_price', 0)}"
         for h in holdings
     ])
     prompt = f"""
@@ -116,7 +112,7 @@ Max Drawdown: {metrics.get('max_drawdown', 'N/A')}%
 Holdings:
 {holdings_text}
 
-Provide your assessment in this format:
+Provide assessment in this format:
 
 PORTFOLIO OVERVIEW
 [2-3 sentences on strategy and overall performance]
@@ -133,6 +129,6 @@ KEY RISKS
 • [Risk 3]
 
 REBALANCING SUGGESTIONS
-[Specific actionable suggestions based on actual holdings and weights]
+[Specific actionable suggestions based on actual holdings]
 """
     return await call_ai(prompt)
