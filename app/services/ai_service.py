@@ -1,85 +1,114 @@
 import httpx
 from app.config import settings
 
-GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.1-8b-instant"  # Updated — llama3-70b-8192 was decommissioned
+CLAUDE_URL   = "https://api.anthropic.com/v1/messages"
+CLAUDE_MODEL = "claude-haiku-4-5"
 
 async def call_ai(prompt: str) -> str:
-    if settings.GROQ_API_KEY:
+    """
+    Priority: Claude API → Groq → Gemini
+    """
+    if settings.ANTHROPIC_API_KEY:
+        return await call_claude(prompt)
+    elif settings.GROQ_API_KEY:
         return await call_groq(prompt)
     elif settings.GEMINI_API_KEY:
         return await call_gemini(prompt)
     else:
-        raise ValueError("No AI API key configured. Add GROQ_API_KEY or GEMINI_API_KEY to environment variables.")
+        raise ValueError("No AI API key configured.")
+
+async def call_claude(prompt: str) -> str:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        res = await client.post(
+            CLAUDE_URL,
+            headers={
+                "x-api-key":         settings.ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type":      "application/json",
+            },
+            json={
+                "model":      CLAUDE_MODEL,
+                "max_tokens": 1200,
+                "messages":   [{"role": "user", "content": prompt}],
+            },
+        )
+        res.raise_for_status()
+        data = res.json()
+        return data["content"][0]["text"]
 
 async def call_groq(prompt: str) -> str:
-    if not settings.GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY not configured")
-
+    GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions"
+    GROQ_MODEL = "llama-3.1-8b-instant"
     async with httpx.AsyncClient(timeout=30.0) as client:
         res = await client.post(
             GROQ_URL,
-            headers={
-                "Authorization": f"Bearer {settings.GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": GROQ_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 1200,
-            },
+            headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.3, "max_tokens": 1200},
         )
         res.raise_for_status()
-        data = res.json()
-        return data["choices"][0]["message"]["content"]
+        return res.json()["choices"][0]["message"]["content"]
 
 async def call_gemini(prompt: str) -> str:
-    GEMINI_MODEL = "gemini-2.0-flash"
-    GEMINI_URL   = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-
+    GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     async with httpx.AsyncClient(timeout=30.0) as client:
         res = await client.post(
             f"{GEMINI_URL}?key={settings.GEMINI_API_KEY}",
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1200},
-            },
+            json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1200}},
         )
         res.raise_for_status()
-        data = res.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        return res.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 async def analyze_stock(ticker: str, name: str, sector: str, financials: dict, prices: dict) -> str:
-    prompt = f"""
-You are a senior investment analyst at a Nigerian SEC-regulated asset management firm.
-Analyze the following NGX-listed stock and produce a concise institutional research note.
-Base your recommendation strictly on the actual figures provided.
+    has_data = any(v not in [None, "N/A"] for v in [financials.get("pe_ratio"), financials.get("eps"), financials.get("revenue")])
 
-Stock: {name} ({ticker})
-Sector: {sector}
-
-KEY FUNDAMENTALS:
+    if has_data:
+        data_section = f"""
+UPLOADED FINANCIAL DATA (use these exact figures):
 - Latest Price:           {prices.get('latest_price')} (as of {prices.get('date')})
-- EPS (Earnings/Share):   {financials.get('eps')}
+- EPS:                    {financials.get('eps')}
 - P/E Ratio:              {financials.get('pe_ratio')}
 - Revenue:                {financials.get('revenue')} (FY {financials.get('year')})
 - Net Profit:             {financials.get('net_profit')}
-- ROE (Return on Equity): {financials.get('roe_percent')}%
-- Debt-to-Equity Ratio:   {financials.get('debt_to_equity')}
+- ROE:                    {financials.get('roe_percent')}%
+- Debt-to-Equity:         {financials.get('debt_to_equity')}
+"""
+    else:
+        data_section = """
+NOTE: No financial data has been uploaded for this stock yet.
+Use your training knowledge of this company's published financials (annual reports, 
+SEC filings, NGX disclosures) to provide the best available estimates.
+Clearly state the year/source of any figures you recall from training.
+If you have no reliable data for this company, state that honestly.
+"""
 
-If any figure shows "N/A", note that data is missing and adjust confidence accordingly.
+    prompt = f"""
+You are a senior investment analyst at a Nigerian SEC-regulated asset management firm.
+Analyze the following NGX-listed stock and produce an institutional research note.
 
-Provide analysis in this exact format:
+Stock: {name} ({ticker})
+Sector: {sector}
+Exchange: Nigerian Exchange Group (NGX)
+
+{data_section}
+
+Provide your analysis in this exact format:
 
 COMPANY OVERVIEW
-[2-3 sentences about what the company does and its market position in Nigeria]
+[2-3 sentences about the company's business and market position in Nigeria]
 
 FINANCIAL HEALTH
-[Assessment using ROE and Debt-to-Equity. State the actual numbers.]
+[Assess profitability, revenue trend, and balance sheet. State specific figures and their source year.]
 
 VALUATION
-[Assessment using P/E ratio vs NGX sector peers. State the actual P/E number.]
+[P/E ratio assessment vs NGX sector peers. State the P/E figure used and its source.]
+
+KEY METRICS SUMMARY
+- P/E Ratio: [figure or N/A if unknown]
+- EPS: [figure or N/A]
+- Revenue: [figure and year]
+- Net Profit: [figure and year]
+- ROE: [figure or N/A]
+- Debt/Equity: [figure or N/A]
 
 KEY RISKS
 • [Risk 1]
@@ -87,21 +116,23 @@ KEY RISKS
 • [Risk 3]
 
 RECOMMENDATION: BUY / HOLD / SELL
-[One clear sentence referencing specific financial metrics]
+[One clear sentence with rationale]
 
 RISK SCORE: LOW / MEDIUM / HIGH
-[One sentence on the main risk driver]
+[One sentence on main risk driver]
+
+DATA NOTE: [State clearly whether figures are from uploaded data or recalled from training, and the approximate year of the data used]
 """
     return await call_ai(prompt)
 
 async def analyze_portfolio(name: str, holdings: list, metrics: dict) -> str:
     holdings_text = "\n".join([
-        f"- {h['ticker']}: quantity {h.get('quantity', 0)}, cost price {h.get('cost_price', 0)}"
+        f"- {h['ticker']}: quantity {h.get('quantity', 0)}, cost price ₦{h.get('cost_price', 0)}"
         for h in holdings
     ])
     prompt = f"""
 You are a senior portfolio manager at a Nigerian SEC-regulated asset management firm.
-Provide an institutional portfolio assessment.
+Provide an institutional portfolio assessment using your knowledge of these NGX-listed companies.
 
 Portfolio: {name}
 YTD Return: {metrics.get('ytd', 'N/A')}%

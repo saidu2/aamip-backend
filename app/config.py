@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change_this_to_a_long_random_string_in_production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
+    ANTHROPIC_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     GROQ_API_KEY: Optional[str] = None
     APP_NAME: str = "AAMIP"
