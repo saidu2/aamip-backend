@@ -22,7 +22,11 @@ class PortfolioAnalysisRequest(BaseModel):
     metrics: dict
 
 def ai_configured() -> bool:
-    return bool(settings.GROQ_API_KEY or settings.GEMINI_API_KEY)
+    return bool(
+        settings.ANTHROPIC_API_KEY or
+        settings.GROQ_API_KEY or
+        settings.GEMINI_API_KEY
+    )
 
 def extract_recommendation(text: str) -> Optional[str]:
     patterns = [
@@ -53,26 +57,28 @@ async def run_stock_analysis(
     current_user = Depends(get_current_user)
 ):
     if not ai_configured():
-        raise HTTPException(status_code=503, detail="AI service not configured. Add GROQ_API_KEY or GEMINI_API_KEY to environment variables.")
+        raise HTTPException(
+            status_code=503,
+            detail="AI service not configured. Add ANTHROPIC_API_KEY, GROQ_API_KEY or GEMINI_API_KEY to environment variables."
+        )
 
     ticker = payload.ticker.upper()
     stock  = db.query(Stock).filter(Stock.ticker == ticker).first()
 
-    # Auto-calculated fundamentals
     fundamentals = calc_fundamentals(db, ticker)
 
     financials_dict = {
-        "revenue":        fundamentals.get("revenue")    or "N/A",
-        "net_profit":     fundamentals.get("net_profit") or "N/A",
-        "eps":            fundamentals.get("eps")         or "N/A",
-        "year":           fundamentals.get("fin_year")    or "N/A",
-        "pe_ratio":       fundamentals.get("pe_ratio")    or "N/A",
-        "roe_percent":    fundamentals.get("roe")         or "N/A",
+        "revenue":        fundamentals.get("revenue")        or "N/A",
+        "net_profit":     fundamentals.get("net_profit")     or "N/A",
+        "eps":            fundamentals.get("eps")             or "N/A",
+        "year":           fundamentals.get("fin_year")        or "N/A",
+        "pe_ratio":       fundamentals.get("pe_ratio")        or "N/A",
+        "roe_percent":    fundamentals.get("roe")             or "N/A",
         "debt_to_equity": fundamentals.get("debt_to_equity") or "N/A",
     }
     prices_dict = {
         "latest_price": fundamentals.get("price")      or "N/A",
-        "date":         fundamentals.get("price_date")  or "N/A",
+        "date":         fundamentals.get("price_date") or "N/A",
     }
 
     try:
@@ -86,7 +92,6 @@ async def run_stock_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
 
-    # Auto-update stock signals
     recommendation = extract_recommendation(analysis_text)
     risk_level     = extract_risk_level(analysis_text)
 
@@ -103,7 +108,7 @@ async def run_stock_analysis(
         analysis_text = analysis_text,
         recommendation= Recommendation(recommendation) if recommendation and recommendation in [r.value for r in Recommendation] else None,
         risk_level    = RiskLevel(risk_level)          if risk_level     and risk_level     in [r.value for r in RiskLevel]     else None,
-        model_used    = "groq-llama3-70b" if settings.GROQ_API_KEY else "gemini-2.0-flash",
+        model_used    = "claude-haiku-4-5" if settings.ANTHROPIC_API_KEY else ("groq-llama3" if settings.GROQ_API_KEY else "gemini"),
     )
     db.add(research)
     db.commit()
@@ -127,7 +132,10 @@ async def run_portfolio_analysis(
     current_user = Depends(get_current_user)
 ):
     if not ai_configured():
-        raise HTTPException(status_code=503, detail="AI service not configured. Add GROQ_API_KEY or GEMINI_API_KEY to environment variables.")
+        raise HTTPException(
+            status_code=503,
+            detail="AI service not configured. Add ANTHROPIC_API_KEY, GROQ_API_KEY or GEMINI_API_KEY to environment variables."
+        )
 
     from app.models.portfolio import Portfolio, Holding
     portfolio = db.query(Portfolio).filter(Portfolio.id == payload.portfolio_id).first()
