@@ -2,12 +2,9 @@ import httpx
 from app.config import settings
 
 CLAUDE_URL   = "https://api.anthropic.com/v1/messages"
-CLAUDE_MODEL = "claude-haiku-4-5"
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 async def call_ai(prompt: str) -> str:
-    """
-    Priority: Claude API → Groq → Gemini
-    """
     if settings.ANTHROPIC_API_KEY:
         return await call_claude(prompt)
     elif settings.GROQ_API_KEY:
@@ -37,22 +34,19 @@ async def call_claude(prompt: str) -> str:
         return data["content"][0]["text"]
 
 async def call_groq(prompt: str) -> str:
-    GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions"
-    GROQ_MODEL = "llama-3.1-8b-instant"
     async with httpx.AsyncClient(timeout=30.0) as client:
         res = await client.post(
-            GROQ_URL,
+            "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.3, "max_tokens": 1200},
+            json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "temperature": 0.3, "max_tokens": 1200},
         )
         res.raise_for_status()
         return res.json()["choices"][0]["message"]["content"]
 
 async def call_gemini(prompt: str) -> str:
-    GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     async with httpx.AsyncClient(timeout=30.0) as client:
         res = await client.post(
-            f"{GEMINI_URL}?key={settings.GEMINI_API_KEY}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.GEMINI_API_KEY}",
             json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1200}},
         )
         res.raise_for_status()
@@ -64,25 +58,24 @@ async def analyze_stock(ticker: str, name: str, sector: str, financials: dict, p
     if has_data:
         data_section = f"""
 UPLOADED FINANCIAL DATA (use these exact figures):
-- Latest Price:           {prices.get('latest_price')} (as of {prices.get('date')})
-- EPS:                    {financials.get('eps')}
-- P/E Ratio:              {financials.get('pe_ratio')}
-- Revenue:                {financials.get('revenue')} (FY {financials.get('year')})
-- Net Profit:             {financials.get('net_profit')}
-- ROE:                    {financials.get('roe_percent')}%
-- Debt-to-Equity:         {financials.get('debt_to_equity')}
+- Latest Price:   {prices.get('latest_price')} (as of {prices.get('date')})
+- EPS:            {financials.get('eps')}
+- P/E Ratio:      {financials.get('pe_ratio')}
+- Revenue:        {financials.get('revenue')} (FY {financials.get('year')})
+- Net Profit:     {financials.get('net_profit')}
+- ROE:            {financials.get('roe_percent')}%
+- Debt-to-Equity: {financials.get('debt_to_equity')}
 """
     else:
         data_section = """
 NOTE: No financial data has been uploaded for this stock yet.
-Use your training knowledge of this company's published financials (annual reports, 
-SEC filings, NGX disclosures) to provide the best available estimates.
-Clearly state the year/source of any figures you recall from training.
-If you have no reliable data for this company, state that honestly.
+Use your training knowledge of this company's published financials (annual reports,
+NGX disclosures, SEC filings) to provide the best available estimates.
+Clearly state the year and source of any figures you recall.
+If you have no reliable data, state that honestly.
 """
 
-    prompt = f"""
-You are a senior investment analyst at a Nigerian SEC-regulated asset management firm.
+    prompt = f"""You are a senior investment analyst at a Nigerian SEC-regulated asset management firm.
 Analyze the following NGX-listed stock and produce an institutional research note.
 
 Stock: {name} ({ticker})
@@ -97,18 +90,18 @@ COMPANY OVERVIEW
 [2-3 sentences about the company's business and market position in Nigeria]
 
 FINANCIAL HEALTH
-[Assess profitability, revenue trend, and balance sheet. State specific figures and their source year.]
+[Assess profitability and balance sheet. State specific figures and their source year.]
 
 VALUATION
-[P/E ratio assessment vs NGX sector peers. State the P/E figure used and its source.]
+[P/E ratio assessment vs NGX sector peers. State the P/E figure and source year.]
 
 KEY METRICS SUMMARY
-- P/E Ratio: [figure or N/A if unknown]
-- EPS: [figure or N/A]
-- Revenue: [figure and year]
-- Net Profit: [figure and year]
-- ROE: [figure or N/A]
-- Debt/Equity: [figure or N/A]
+- P/E Ratio: [figure and year, or N/A]
+- EPS: [figure and year, or N/A]
+- Revenue: [figure and year, or N/A]
+- Net Profit: [figure and year, or N/A]
+- ROE: [figure and year, or N/A]
+- Debt/Equity: [figure and year, or N/A]
 
 KEY RISKS
 • [Risk 1]
@@ -121,8 +114,7 @@ RECOMMENDATION: BUY / HOLD / SELL
 RISK SCORE: LOW / MEDIUM / HIGH
 [One sentence on main risk driver]
 
-DATA NOTE: [State clearly whether figures are from uploaded data or recalled from training, and the approximate year of the data used]
-"""
+DATA NOTE: [State whether figures are from uploaded data or recalled from training, and the approximate year]"""
     return await call_ai(prompt)
 
 async def analyze_portfolio(name: str, holdings: list, metrics: dict) -> str:
@@ -130,36 +122,25 @@ async def analyze_portfolio(name: str, holdings: list, metrics: dict) -> str:
         f"- {h['ticker']}: quantity {h.get('quantity', 0)}, cost price ₦{h.get('cost_price', 0)}"
         for h in holdings
     ])
-    prompt = f"""
-You are a senior portfolio manager at a Nigerian SEC-regulated asset management firm.
-Provide an institutional portfolio assessment using your knowledge of these NGX-listed companies.
+    prompt = f"""You are a senior portfolio manager at a Nigerian SEC-regulated asset management firm.
+Provide an institutional portfolio assessment.
 
 Portfolio: {name}
 YTD Return: {metrics.get('ytd', 'N/A')}%
-Sharpe Ratio: {metrics.get('sharpe', 'N/A')}
-Volatility: {metrics.get('volatility', 'N/A')}%
-Max Drawdown: {metrics.get('max_drawdown', 'N/A')}%
-
 Holdings:
 {holdings_text}
 
-Provide assessment in this format:
-
 PORTFOLIO OVERVIEW
-[2-3 sentences on strategy and overall performance]
+[2-3 sentences on strategy and performance]
 
 DIVERSIFICATION ASSESSMENT
-[Sector concentration analysis for a Nigerian fund]
-
-PERFORMANCE COMMENTARY
-[Commentary on YTD return and risk-adjusted performance]
+[Sector concentration analysis]
 
 KEY RISKS
-• [Risk 1 specific to actual holdings]
+• [Risk 1]
 • [Risk 2]
 • [Risk 3]
 
 REBALANCING SUGGESTIONS
-[Specific actionable suggestions based on actual holdings]
-"""
+[Specific actionable suggestions]"""
     return await call_ai(prompt)
