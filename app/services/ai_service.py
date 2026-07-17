@@ -15,23 +15,30 @@ async def call_ai(prompt: str) -> str:
         raise ValueError("No AI API key configured.")
 
 async def call_claude(prompt: str) -> str:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        res = await client.post(
-            CLAUDE_URL,
-            headers={
-                "x-api-key":         settings.ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type":      "application/json",
-            },
-            json={
-                "model":      CLAUDE_MODEL,
-                "max_tokens": 1200,
-                "messages":   [{"role": "user", "content": prompt}],
-            },
-        )
-        res.raise_for_status()
-        data = res.json()
-        return data["content"][0]["text"]
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(
+                CLAUDE_URL,
+                headers={
+                    "x-api-key":         settings.ANTHROPIC_API_KEY.strip(),
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type":      "application/json",
+                },
+                json={
+                    "model":      CLAUDE_MODEL,
+                    "max_tokens": 1200,
+                    "messages":   [{"role": "user", "content": prompt}],
+                },
+            )
+            if not res.is_success:
+                error_body = res.text
+                raise ValueError(f"Anthropic API error {res.status_code}: {error_body}")
+            data = res.json()
+            return data["content"][0]["text"]
+    except httpx.HTTPStatusError as e:
+        raise ValueError(f"Anthropic HTTP error: {e.response.text}")
+    except Exception as e:
+        raise ValueError(f"Claude call failed: {str(e)}")
 
 async def call_groq(prompt: str) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -56,52 +63,39 @@ async def analyze_stock(ticker: str, name: str, sector: str, financials: dict, p
     has_data = any(v not in [None, "N/A"] for v in [financials.get("pe_ratio"), financials.get("eps"), financials.get("revenue")])
 
     if has_data:
-        data_section = f"""
-UPLOADED FINANCIAL DATA (use these exact figures):
-- Latest Price:   {prices.get('latest_price')} (as of {prices.get('date')})
-- EPS:            {financials.get('eps')}
-- P/E Ratio:      {financials.get('pe_ratio')}
-- Revenue:        {financials.get('revenue')} (FY {financials.get('year')})
-- Net Profit:     {financials.get('net_profit')}
-- ROE:            {financials.get('roe_percent')}%
-- Debt-to-Equity: {financials.get('debt_to_equity')}
-"""
+        data_section = f"""UPLOADED FINANCIAL DATA:
+- Latest Price: {prices.get('latest_price')} (as of {prices.get('date')})
+- EPS: {financials.get('eps')}
+- P/E Ratio: {financials.get('pe_ratio')}
+- Revenue: {financials.get('revenue')} (FY {financials.get('year')})
+- Net Profit: {financials.get('net_profit')}
+- ROE: {financials.get('roe_percent')}%
+- Debt-to-Equity: {financials.get('debt_to_equity')}"""
     else:
-        data_section = """
-NOTE: No financial data has been uploaded for this stock yet.
-Use your training knowledge of this company's published financials (annual reports,
-NGX disclosures, SEC filings) to provide the best available estimates.
-Clearly state the year and source of any figures you recall.
-If you have no reliable data, state that honestly.
-"""
+        data_section = """No financial data uploaded yet. Use your training knowledge of this company's published financials from annual reports and NGX disclosures. State the year and source of any figures you recall."""
 
-    prompt = f"""You are a senior investment analyst at a Nigerian SEC-regulated asset management firm.
-Analyze the following NGX-listed stock and produce an institutional research note.
-
-Stock: {name} ({ticker})
-Sector: {sector}
-Exchange: Nigerian Exchange Group (NGX)
+    prompt = f"""You are a senior investment analyst at a Nigerian SEC-regulated asset management firm. Analyze {name} ({ticker}), sector: {sector}, listed on NGX.
 
 {data_section}
 
-Provide your analysis in this exact format:
+Provide analysis in this format:
 
 COMPANY OVERVIEW
-[2-3 sentences about the company's business and market position in Nigeria]
+[2-3 sentences about the company]
 
 FINANCIAL HEALTH
-[Assess profitability and balance sheet. State specific figures and their source year.]
+[Assessment with specific figures and source year]
 
 VALUATION
-[P/E ratio assessment vs NGX sector peers. State the P/E figure and source year.]
+[P/E assessment vs NGX peers]
 
 KEY METRICS SUMMARY
-- P/E Ratio: [figure and year, or N/A]
-- EPS: [figure and year, or N/A]
-- Revenue: [figure and year, or N/A]
-- Net Profit: [figure and year, or N/A]
-- ROE: [figure and year, or N/A]
-- Debt/Equity: [figure and year, or N/A]
+- P/E Ratio: [value or N/A]
+- EPS: [value or N/A]
+- Revenue: [value or N/A]
+- Net Profit: [value or N/A]
+- ROE: [value or N/A]
+- Debt/Equity: [value or N/A]
 
 KEY RISKS
 • [Risk 1]
@@ -109,21 +103,18 @@ KEY RISKS
 • [Risk 3]
 
 RECOMMENDATION: BUY / HOLD / SELL
-[One clear sentence with rationale]
+[One sentence rationale]
 
 RISK SCORE: LOW / MEDIUM / HIGH
-[One sentence on main risk driver]
+[One sentence]
 
-DATA NOTE: [State whether figures are from uploaded data or recalled from training, and the approximate year]"""
+DATA NOTE: [State data source - uploaded or training knowledge, and year]"""
+
     return await call_ai(prompt)
 
 async def analyze_portfolio(name: str, holdings: list, metrics: dict) -> str:
-    holdings_text = "\n".join([
-        f"- {h['ticker']}: quantity {h.get('quantity', 0)}, cost price ₦{h.get('cost_price', 0)}"
-        for h in holdings
-    ])
+    holdings_text = "\n".join([f"- {h['ticker']}: qty {h.get('quantity', 0)}, cost ₦{h.get('cost_price', 0)}" for h in holdings])
     prompt = f"""You are a senior portfolio manager at a Nigerian SEC-regulated asset management firm.
-Provide an institutional portfolio assessment.
 
 Portfolio: {name}
 YTD Return: {metrics.get('ytd', 'N/A')}%
@@ -131,7 +122,7 @@ Holdings:
 {holdings_text}
 
 PORTFOLIO OVERVIEW
-[2-3 sentences on strategy and performance]
+[2-3 sentences]
 
 DIVERSIFICATION ASSESSMENT
 [Sector concentration analysis]
@@ -142,5 +133,5 @@ KEY RISKS
 • [Risk 3]
 
 REBALANCING SUGGESTIONS
-[Specific actionable suggestions]"""
+[Specific suggestions]"""
     return await call_ai(prompt)
